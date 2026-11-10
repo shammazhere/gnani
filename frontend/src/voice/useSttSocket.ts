@@ -14,7 +14,7 @@ import {
 const FRAME_PACING_MS = 32;
 const FINALIZE_TIMEOUT_MS = 15_000;
 
-function resolveWsUrl(options: UseSttSocketOptions): string {
+function buildSttQueryParams(options: UseSttSocketOptions): URLSearchParams {
   const params = new URLSearchParams({
     lang: options.lang,
     mode: options.mode,
@@ -23,7 +23,11 @@ function resolveWsUrl(options: UseSttSocketOptions): string {
   if (options.keyterms && options.keyterms.length > 0) {
     params.set("keyterms", JSON.stringify(options.keyterms));
   }
+  return params;
+}
 
+function resolveWsUrl(options: UseSttSocketOptions): string {
+  const params = buildSttQueryParams(options);
   const envWsBase = (import.meta.env.VITE_WS_URL || "")
     .trim()
     .replace(/\/+$/, "");
@@ -40,6 +44,31 @@ function resolveWsUrl(options: UseSttSocketOptions): string {
 
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}/ws/stt?${params.toString()}`;
+}
+
+function resolveSttHttpUrl(options: UseSttSocketOptions): string {
+  const params = buildSttQueryParams(options);
+  const envApiBase = (import.meta.env.VITE_API_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  const base = options.wsBaseUrl
+    ? options.wsBaseUrl
+        .replace(/\/+$/, "")
+        .replace(/^wss:/i, "https:")
+        .replace(/^ws:/i, "http:")
+    : envApiBase;
+  return `${base}/api/voice/stt?${params.toString()}`;
+}
+
+function mergePcmChunks(chunks: ArrayBuffer[]): Uint8Array {
+  const totalBytes = chunks.reduce((sum, buf) => sum + buf.byteLength, 0);
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(new Uint8Array(chunk), offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
 
 function isPermissionDeniedError(err: unknown): boolean {
@@ -70,6 +99,7 @@ export function useSttSocket(options: UseSttSocketOptions): UseSttSocketReturn {
   const frameQueueRef = useRef<ArrayBuffer[]>([]);
   const pacerTimerRef = useRef<number | null>(null);
   const stoppingRef = useRef(false);
+  const httpFallbackRef = useRef(false);
   const audioSavedRef = useRef(false);
   const serverErrorRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
@@ -266,6 +296,7 @@ export function useSttSocket(options: UseSttSocketOptions): UseSttSocketReturn {
     }
 
     stoppingRef.current = false;
+    httpFallbackRef.current = false;
     audioSavedRef.current = false;
     frameQueueRef.current = [];
     setError(null);
@@ -330,7 +361,22 @@ export function useSttSocket(options: UseSttSocketOptions): UseSttSocketReturn {
       };
 
       source.connect(worklet);
-      await openWebSocket();
+      try {
+        await openWebSocket();
+      } catch {
+        // Serverless hosts (e.g. Vercel Functions) reject inbound WebSockets;
+        // retain recorded PCM frames and upload over HTTPS POST /api/voice/stt on stop().
+        if (!stoppingRef.current && mediaStreamRef.current) {
+          httpFallbackRef.current = true;
+          setStatus("recording");
+        } else {
+          cleanupMedia();
+          emitError(
+            "STT_CONNECTION_LOST",
+            "Could not initialize voice recording stream.",
+          );
+        }
+      }
     } catch {
       cleanupMedia();
       emitError(
@@ -366,24 +412,91 @@ export function useSttSocket(options: UseSttSocketOptions): UseSttSocketReturn {
       });
     }
 
-    // Wait for queued 1,024-byte frames to drain at 32 ms cadence (never burst).
-    await new Promise<void>((resolve) => {
-      const checkDrain = () => {
-        const ws = wsRef.current;
-        if (
-          frameQueueRef.current.length === 0 ||
-          !ws ||
-          ws.readyState !== WebSocket.OPEN
-        ) {
-          resolve();
-          return;
-        }
-        window.setTimeout(checkDrain, FRAME_PACING_MS);
-      };
-      checkDrain();
-    });
+    const useHttpFallback = httpFallbackRef.current;
+    const httpChunks = useHttpFallback ? frameQueueRef.current.splice(0) : [];
+
+    if (!useHttpFallback) {
+      // Wait for queued 1,024-byte frames to drain at 32 ms cadence (never burst).
+      await new Promise<void>((resolve) => {
+        const checkDrain = () => {
+          const ws = wsRef.current;
+          if (
+            frameQueueRef.current.length === 0 ||
+            !ws ||
+            ws.readyState !== WebSocket.OPEN
+          ) {
+            resolve();
+            return;
+          }
+          window.setTimeout(checkDrain, FRAME_PACING_MS);
+        };
+        checkDrain();
+      });
+    }
 
     cleanupMedia();
+
+    if (useHttpFallback) {
+      httpFallbackRef.current = false;
+      try {
+        const pcmBytes = mergePcmChunks(httpChunks);
+        const body = pcmBytes.buffer.slice(
+          pcmBytes.byteOffset,
+          pcmBytes.byteOffset + pcmBytes.byteLength,
+        ) as ArrayBuffer;
+        const response = await fetch(resolveSttHttpUrl(optionsRef.current), {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body,
+        });
+        const payload = (await response.json().catch(() => ({}))) as {
+          segments?: SttTranscriptEvent[];
+          detected_language_code?: string;
+          audio_ref?: string;
+          sha256?: string;
+          duration_ms?: number;
+          code?: ErrorCode;
+          message?: string;
+        };
+        if (!response.ok) {
+          emitError(
+            payload.code ?? "STT_CONNECTION_LOST",
+            payload.message ?? "Voice transcription upload failed.",
+          );
+          return;
+        }
+        const uploadedSegments = Array.isArray(payload.segments)
+          ? payload.segments
+          : [];
+        if (uploadedSegments.length > 0) {
+          setSegments(uploadedSegments);
+          for (const seg of uploadedSegments) {
+            optionsRef.current.onTranscript?.(seg);
+          }
+        }
+        if (payload.detected_language_code) {
+          setDetectedLanguage(payload.detected_language_code);
+        }
+        if (payload.audio_ref && payload.sha256 !== undefined) {
+          const saved: SavedAudio = {
+            audio_ref: payload.audio_ref,
+            sha256: payload.sha256,
+            duration_ms: payload.duration_ms ?? 0,
+          };
+          audioSavedRef.current = true;
+          setSavedAudio(saved);
+          optionsRef.current.onAudioSaved?.(saved);
+        }
+      } catch {
+        emitError(
+          "STT_CONNECTION_LOST",
+          "Lost connection while uploading voice recording.",
+        );
+        return;
+      }
+      setStatus("idle");
+      return;
+    }
 
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -416,6 +529,7 @@ export function useSttSocket(options: UseSttSocketOptions): UseSttSocketReturn {
 
   const reset = useCallback(() => {
     stoppingRef.current = true;
+    httpFallbackRef.current = false;
     audioSavedRef.current = false;
     serverErrorRef.current = false;
     cleanupMedia();

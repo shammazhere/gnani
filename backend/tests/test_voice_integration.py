@@ -140,3 +140,17 @@ def test_voice_router_mounted_and_full_stt_extract_draft_confirm_evidence_flow(
 
     tts_res = tc.post("/api/voice/tts", json={"text": "Suresh ke paas 400 baaki", "lang": "hi-IN"})
     assert tts_res.status_code == 200 and len(tts_res.content) > 0
+
+
+def test_vercel_entrypoint_and_quoted_database_url() -> None:
+    import vercel_app
+    from app import main as app_main
+    from app.db import normalize_database_url
+
+    assert vercel_app.app is app_main.app
+    route_paths = {getattr(r, "path", None) for r in vercel_app.app.routes}
+    assert "/api/health" in route_paths
+    assert "/api/voice/stt" in route_paths
+    assert normalize_database_url(
+        '  "postgres://u:p@ep.neon.tech/neondb?sslmode=require" '
+    ) == ("postgresql+psycopg://u:p@ep.neon.tech/neondb?sslmode=require")

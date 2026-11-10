@@ -442,3 +442,91 @@ async def test_ws_stt_proxy_saves_audio_when_upstream_closes_uncleanly_after_tra
     finally:
         server.close()
         await server.wait_closed()
+
+
+def test_http_stt_upload_fake_and_invalid_params(tmp_path: Path) -> None:
+    app = FastAPI()
+    app.include_router(router)
+    settings = _make_settings(tmp_path, voice_impl="fake")
+    store = LocalAudioStore(base_dir=tmp_path / "audio")
+    app.dependency_overrides[get_voice_settings] = lambda: settings
+    app.dependency_overrides[get_audio_store] = lambda: store
+
+    with TestClient(app) as tc:
+        res = tc.post(
+            "/api/voice/stt?lang=hi-IN&mode=narration&kind=narration",
+            content=b"\x01\x00" * 512,
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert len(body["segments"]) == 1
+        assert body["segments"][0]["text"]
+        assert body["detected_language_code"] == "hi-IN"
+        assert body["audio_ref"]
+        assert len(body["sha256"]) == 64
+
+        bad = tc.post(
+            "/api/voice/stt?lang=hi-IN&mode=bogus&kind=narration", content=b""
+        )
+        assert bad.status_code == 400
+        assert bad.json()["code"] == ErrorCode.UNSUPPORTED_LANGUAGE.value
+
+
+@pytest.mark.asyncio
+async def test_http_stt_upload_streams_to_upstream_gnani(tmp_path: Path) -> None:
+    async def handler(websocket: Any) -> None:
+        while True:
+            msg = await websocket.recv()
+            if isinstance(msg, bytes):
+                if msg == b"\x00" * 1024:
+                    break
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "transcript",
+                    "transcript": "700 rupees today",
+                    "language": "en-IN",
+                }
+            )
+        )
+        await asyncio.sleep(0.02)
+
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    try:
+        port = server.sockets[0].getsockname()[1]
+        app = FastAPI()
+        app.include_router(router)
+        settings = _make_settings(tmp_path, wss_url=f"ws://127.0.0.1:{port}")
+        store = LocalAudioStore(base_dir=tmp_path / "audio")
+        app.dependency_overrides[get_voice_settings] = lambda: settings
+        app.dependency_overrides[get_audio_store] = lambda: store
+
+        import backend.voice.router as voice_router_mod
+
+        orig_cls = voice_router_mod.GnaniSttClient
+        voice_router_mod.GnaniSttClient = lambda settings: orig_cls(  # type: ignore[misc, assignment]
+            settings=settings,
+            frame_interval_s=0.001,
+            trailing_silence_frames=1,
+            post_end_flush_s=0.05,
+        )
+        try:
+
+            def _post_audio() -> dict[str, Any]:
+                with TestClient(app) as tc:
+                    resp = tc.post(
+                        "/api/voice/stt?lang=en-IN&mode=narration&kind=narration",
+                        content=b"\x02\x00" * 1024,
+                    )
+                    assert resp.status_code == 200
+                    return resp.json()
+
+            data = await asyncio.wait_for(asyncio.to_thread(_post_audio), timeout=3.0)
+            assert [s["text"] for s in data["segments"]] == ["700 rupees today"]
+            assert data["detected_language_code"] == "en-IN"
+            assert data["audio_ref"]
+        finally:
+            voice_router_mod.GnaniSttClient = orig_cls
+    finally:
+        server.close()
+        await server.wait_closed()

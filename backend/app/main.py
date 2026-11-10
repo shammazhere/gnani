@@ -5,11 +5,12 @@ Developer B: Product and Data
 """
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -37,7 +38,7 @@ except ModuleNotFoundError:
     )
 
 from app.config import Settings
-from app.db import Base, engine
+from app.db import Base, engine, ensure_tables_ready
 from app.routers import auth, contractor, entries, evidence
 from app.services.audio_store import AppAudioStore
 
@@ -68,6 +69,12 @@ def create_application() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @application.middleware("http")
+    async def ensure_serverless_schema(request: Request, call_next):
+        if os.environ.get("VERCEL"):
+            ensure_tables_ready()
+        return await call_next(request)
 
     # Include routers
     application.include_router(auth.router, prefix="/api/auth", tags=["auth"])

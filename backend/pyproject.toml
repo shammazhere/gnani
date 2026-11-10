@@ -2,7 +2,7 @@
 name = "saakshi-backend"
 version = "1.0.0"
 description = "Saakshi — Worker-Held Voice Wage Ledger API"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "saakshi-contracts",
     "fastapi==0.115.0",
@@ -26,5 +26,5 @@ dependencies = [
 saakshi-contracts = { path = "../contracts" }
 
 [tool.vercel]
-entrypoint = "app.main:app"
+entrypoint = "vercel_app:app"
 

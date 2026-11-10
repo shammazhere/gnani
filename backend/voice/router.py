@@ -8,7 +8,15 @@ import json
 from collections.abc import AsyncIterator
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, Response, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    Query,
+    Request,
+    Response,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -16,7 +24,7 @@ from .config import VoiceSettings, load_voice_settings
 from .confirmation import classify_confirmation
 from .errors import ErrorCode, VoiceError, build_error_payload
 from .fixtures.fake_voice import FakeVoice
-from .gnani_stt import GnaniSttClient
+from .gnani_stt import FRAME_BYTES, GnaniSttClient
 from .gnani_tts import GnaniTtsClient, TtsAudience
 from .models import (
     AudioKind,
@@ -24,6 +32,7 @@ from .models import (
     ConfirmationResult,
     EntryDraft,
     ExtractContext,
+    SupportedLanguage,
     VadMode,
     VoiceService,
     normalize_language,
@@ -109,6 +118,36 @@ def _parse_keyterms_param(raw: str | None) -> list[str] | None:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
+def _validate_stt_params(
+    lang: str, mode: str, kind: str
+) -> tuple[SupportedLanguage, VadMode, AudioKind]:
+    norm_lang = normalize_language(lang)
+    if mode not in _VALID_MODES:
+        raise VoiceError(
+            ErrorCode.UNSUPPORTED_LANGUAGE,
+            f"Invalid STT mode: {mode}",
+            status_code=400,
+        )
+    if kind not in _VALID_KINDS:
+        raise VoiceError(
+            ErrorCode.EXTRACTION_FAILED,
+            f"Invalid audio kind: {kind}",
+            status_code=400,
+        )
+    return norm_lang, mode, kind  # type: ignore[return-value]
+
+
+def _fake_stt_transcript(norm_lang: SupportedLanguage, vad_mode: VadMode) -> str:
+    if vad_mode == "confirm":
+        return "हाँ ठीक है" if norm_lang == "hi-IN" else "yes"
+    fake = FakeVoice()
+    match = next(
+        (f for f in fake.list_fixtures() if f["lang"] == norm_lang),
+        fake.list_fixtures()[0],
+    )
+    return match["transcript"]
+
+
 @router.websocket("/ws/stt")
 async def stt_websocket_proxy(
     websocket: WebSocket,
@@ -123,24 +162,11 @@ async def stt_websocket_proxy(
     await websocket.accept()
 
     try:
-        norm_lang = normalize_language(lang)
+        norm_lang, vad_mode, audio_kind = _validate_stt_params(lang, mode, kind)
     except VoiceError as err:
         await _send_error_and_close(websocket, err.code, err.message)
         return
 
-    if mode not in _VALID_MODES:
-        await _send_error_and_close(
-            websocket, ErrorCode.UNSUPPORTED_LANGUAGE, f"Invalid STT mode: {mode}"
-        )
-        return
-    if kind not in _VALID_KINDS:
-        await _send_error_and_close(
-            websocket, ErrorCode.EXTRACTION_FAILED, f"Invalid audio kind: {kind}"
-        )
-        return
-
-    vad_mode: VadMode = mode  # type: ignore[assignment]
-    audio_kind: AudioKind = kind  # type: ignore[assignment]
     parsed_keyterms = _parse_keyterms_param(keyterms)
 
     recorded_pcm = bytearray()
@@ -191,15 +217,7 @@ async def stt_websocket_proxy(
             # Drain audio frames from browser and return fixture transcript without network.
             async for _ in _pcm_iter():
                 pass
-            fake = FakeVoice()
-            if vad_mode == "confirm":
-                fake_text = "हाँ ठीक है" if norm_lang == "hi-IN" else "yes"
-            else:
-                match = next(
-                    (f for f in fake.list_fixtures() if f["lang"] == norm_lang),
-                    fake.list_fixtures()[0],
-                )
-                fake_text = match["transcript"]
+            fake_text = _fake_stt_transcript(norm_lang, vad_mode)
             await websocket.send_json(
                 {
                     "type": "transcript",
@@ -262,6 +280,88 @@ async def stt_websocket_proxy(
     finally:
         if reader_task is not None and not reader_task.done():
             reader_task.cancel()
+
+
+@router.post("/api/voice/stt")
+async def transcribe_pcm_upload(
+    request: Request,
+    lang: str = Query(default="hi-IN"),
+    mode: str = Query(default="narration"),
+    kind: str = Query(default="narration"),
+    keyterms: str | None = Query(default=None),
+    audio_store: AudioStore = Depends(get_audio_store),
+    settings: VoiceSettings = Depends(get_voice_settings),
+) -> JSONResponse:
+    """HTTP fallback STT upload for serverless hosts without inbound WebSockets."""
+    try:
+        norm_lang, vad_mode, audio_kind = _validate_stt_params(lang, mode, kind)
+        parsed_keyterms = _parse_keyterms_param(keyterms)
+        pcm_bytes = await request.body()
+
+        segments: list[dict[str, object]] = []
+        if settings.voice_impl == "fake":
+            segments.append(
+                {
+                    "type": "transcript",
+                    "text": _fake_stt_transcript(norm_lang, vad_mode),
+                    "detected_language_code": norm_lang,
+                    "segment_index": 1,
+                    "latency_ms": 15,
+                }
+            )
+        else:
+
+            async def _pcm_frames() -> AsyncIterator[bytes]:
+                for offset in range(0, len(pcm_bytes), FRAME_BYTES):
+                    yield pcm_bytes[offset : offset + FRAME_BYTES]
+
+            client = GnaniSttClient(settings=settings)
+            try:
+                async for evt in client.transcribe_pcm_stream(
+                    _pcm_frames(),
+                    norm_lang,
+                    vad_mode,
+                    keyterms=parsed_keyterms,
+                ):
+                    segments.append(
+                        {
+                            "type": "transcript",
+                            "text": evt.text,
+                            "detected_language_code": evt.detected_language_code,
+                            "segment_index": evt.segment_index,
+                            "latency_ms": evt.latency_ms,
+                        }
+                    )
+            except VoiceError as err:
+                if not segments or err.code not in (
+                    ErrorCode.STT_CONNECTION_LOST,
+                    ErrorCode.STT_TIMEOUT,
+                ):
+                    raise
+
+        wav_bytes, _ = ensure_pcm16_16k_wav(pcm_bytes)
+        saved = await audio_store.save_audio(wav_bytes, audio_kind)
+        detected_lang = (
+            str(segments[-1]["detected_language_code"]) if segments else norm_lang
+        )
+        return JSONResponse(
+            content={
+                "segments": segments,
+                "detected_language_code": detected_lang,
+                "audio_ref": saved.audio_ref,
+                "sha256": saved.sha256,
+                "duration_ms": saved.duration_ms,
+            }
+        )
+    except VoiceError as err:
+        return JSONResponse(status_code=err.status_code, content=err.to_payload())
+    except Exception:
+        return JSONResponse(
+            status_code=500,
+            content=build_error_payload(
+                ErrorCode.STT_CONNECTION_LOST, "STT upload failed unexpectedly."
+            ),
+        )
 
 
 @router.post("/api/voice/tts")
