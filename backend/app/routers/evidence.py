@@ -117,6 +117,13 @@ async def build_evidence_pack(
     db: Annotated[Session, Depends(get_db)],
 ) -> EvidencePackResponse:
     """Build evidence pack strictly for the JWT-authenticated worker."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     start_dt = _parse_iso_date(request.period_from, "period_from")
     end_dt = _parse_iso_date(request.period_to, "period_to")
     if start_dt > end_dt:
@@ -240,6 +247,13 @@ async def download_evidence_pdf(
     db: Annotated[Session, Depends(get_db)],
 ) -> FileResponse:
     """Download the generated PDF for an evidence pack owned by the authenticated worker."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     file_path = _resolve_owned_pack_file(pack_id, "pdf_uri", current_worker_id, db)
     return FileResponse(
         path=str(file_path),
@@ -255,6 +269,13 @@ async def download_evidence_zip(
     db: Annotated[Session, Depends(get_db)],
 ) -> FileResponse:
     """Download the generated ZIP archive for an evidence pack owned by the authenticated worker."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     file_path = _resolve_owned_pack_file(pack_id, "zip_uri", current_worker_id, db)
     return FileResponse(
         path=str(file_path),
@@ -269,6 +290,13 @@ async def verify_chain(
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     """Verify hash chain integrity for the authenticated worker's ledger entries."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     entries = (
         db.query(Entry)
         .filter(

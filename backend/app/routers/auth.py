@@ -163,6 +163,8 @@ def verify_pin(alias: str, pin: str, db) -> Worker | None:
     worker = db.query(Worker).filter(Worker.alias == alias).first()
     if not worker:
         return None
+    if not worker.is_active:
+        return None
     if not bcrypt.verify(pin, worker.pin_hash):
         return None
     return worker
@@ -269,7 +271,12 @@ async def change_worker_pin(
     """Change the authenticated worker's PIN after verifying the current PIN."""
     client_ip = _check_pin_rate_limit(request)
     worker = db.query(Worker).filter(Worker.id == worker_id).first()
-    if worker is None or not bcrypt.verify(
+    if worker is None or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current PIN verification failed or worker account is inactive",
+        )
+    if not bcrypt.verify(
         pin_data.current_pin.get_secret_value(),
         worker.pin_hash,
     ):
@@ -292,7 +299,7 @@ async def update_worker_language(
 ) -> dict[str, str]:
     """Update the authenticated worker's preferred UI/voice language."""
     worker = db.query(Worker).filter(Worker.id == worker_id).first()
-    if worker is None:
+    if worker is None or not worker.is_active:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Worker not found",
