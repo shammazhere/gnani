@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import ClassVar
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -33,6 +34,7 @@ class Worker(Base):
     language = Column(String, default="hi-IN")
     consent_audio_uri = Column(String, nullable=True)
     consent_text_version = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True)
     consent_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

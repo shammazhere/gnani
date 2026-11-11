@@ -242,6 +242,13 @@ async def create_entry_draft(
     db: Annotated[Session, Depends(get_db)],
 ) -> VoiceDraftReview | JSONResponse:
     """Handle either streaming-session JSON draft persistence or raw audio draft review."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     content_type = (
         request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     )
@@ -414,6 +421,13 @@ async def confirm_voice_draft(
     db: Annotated[Session, Depends(get_db)],
 ) -> EntryResponse:
     """Persist the reviewed entry only after the worker explicitly confirms it."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     try:
         claims = jwt.decode(
             confirmation.draft_token,
@@ -563,6 +577,13 @@ async def confirm_voice_draft(
 
     return _entry_response(entry)
 
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
 
 @router.get("/", response_model=list[EntryResponse])
 async def get_entries(
@@ -570,6 +591,13 @@ async def get_entries(
     db: Annotated[Session, Depends(get_db)],
 ) -> list[EntryResponse]:
     """Get all entries for the current worker."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     entries = (
         db.query(Entry)
         .filter(Entry.worker_id == current_worker_id)
@@ -605,6 +633,13 @@ async def get_entry(
     db: Annotated[Session, Depends(get_db)],
 ) -> EntryResponse:
     """Get a single entry by ID."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     entry = (
         db.query(Entry)
         .filter(Entry.id == entry_id, Entry.worker_id == current_worker_id)
@@ -640,6 +675,13 @@ async def confirm_entry(
     db: Annotated[Session, Depends(get_db)],
 ) -> EntryResponse:
     """Confirm entry with worker's spoken yes."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     # Get entry
     entry = (
         db.query(Entry)
@@ -739,6 +781,13 @@ async def create_correction(
     db: Annotated[Session, Depends(get_db)],
 ) -> EntryResponse:
     """Create a correcting entry."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     # Get original entry
     original_entry = (
         db.query(Entry)
@@ -801,6 +850,13 @@ async def share_entry(
     db: Annotated[Session, Depends(get_db)],
 ) -> dict:
     """Create share token for contractor."""
+    # Validate worker is active
+    worker = db.query(Worker).filter(Worker.id == current_worker_id).first()
+    if not worker or not worker.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Worker not found or account is inactive",
+        )
     # Get entry
     entry = (
         db.query(Entry)
