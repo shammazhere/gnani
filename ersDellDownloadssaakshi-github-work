@@ -1,0 +1,23 @@
+[1mdiff --git a/backend/app/migrations/versions/002_add_worker_is_active.py b/backend/app/migrations/versions/002_add_worker_is_active.py[m
+[1mindex 15c3486..8c85439 100644[m
+[1m--- a/backend/app/migrations/versions/002_add_worker_is_active.py[m
+[1m+++ b/backend/app/migrations/versions/002_add_worker_is_active.py[m
+[36m@@ -35,4 +35,4 @@[m [mdef upgrade() -> None:[m
+ def downgrade() -> None:[m
+     # Remove is_active column using batch_alter_table for SQLite compatibility[m
+     with op.batch_alter_table("workers") as batch_op:[m
+[31m-        batch_op.drop_column("is_active")[m
+\ No newline at end of file[m
+[32m+[m[32m        batch_op.drop_column("is_active")[m
+[1mdiff --git a/backend/app/routers/entries.py b/backend/app/routers/entries.py[m
+[1mindex 5a1734a..bf6b654 100644[m
+[1m--- a/backend/app/routers/entries.py[m
+[1m+++ b/backend/app/routers/entries.py[m
+[36m@@ -585,6 +585,7 @@[m [masync def confirm_voice_draft([m
+             detail="Worker not found or account is inactive",[m
+         )[m
+ [m
+[32m+[m
+ @router.get("/", response_model=list[EntryResponse])[m
+ async def get_entries([m
+     current_worker_id: CurrentWorker,[m
