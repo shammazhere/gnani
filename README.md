@@ -1,103 +1,50 @@
 # Saakshi
 
-**Saakshi** (Hindi/Kannada for "witness") — a voice-first wage ledger that gives daily-wage and migrant workers a structured, cryptographically secured record of their work, owned and controlled from their phone.
-
----
-
-## About the Project
-
-Saakshi replaces paper-based wage records with a voice-driven digital ledger. Workers record spoken descriptions of their day; the system transcribes, structures, and stores the entry in a hash-chained ledger. Confirmed entries can be exported as evidence packs — PDF summaries with audio ZIP files — for use with legal-aid clinics, NGOs, or contractors.
-
-The project is designed so Developer A can focus on voice/STT/TTS integrations and Developer B on backend/API/data, working independently on separate chunks with shared contracts.
+**Saakshi** (Hindi and Kannada for *"witness"*) is a worker-held, voice-first wage ledger built for daily-wage and migrant workers to maintain a structured, tamper-evident record of their work and pay directly from their phone.
 
 ---
 
 ## Problem Statement
 
-Daily-wage and migrant workers often lack reliable, portable wage records. Paper logs are easily lost, falsified, or inaccessible when workers move between sites. Missing or inadequate documentation undermines legal claims, unpaid-wage disputes, and social protection. Without a trusted record, workers have little recourse when wages are withheld or conditions are misrepresented.
-
-The result: wage theft goes unchallenged, legal-aid providers lack verified evidence, and workers lose the ability to prove their employment history across job changes.
+Informal daily-wage and migrant workers frequently work without written contracts or employer-independent pay logs. Paper notes are easily lost, damaged, or unavailable when workers move across sites, while employer-managed records are controlled by the same party that may delay or withhold wages. When pay disputes arise, workers often lack a dated, verifiable employment and payment history to present to labour helplines, NGOs, or legal-aid clinics.
 
 ---
 
-## Our Solution
+## Solution
 
-Saakshi gives workers a voice-owned, cryptographically secured record they can export and share on their own terms. A worker holds their phone and speaks about their work; the system transcribes the recording, extracts structured fields (date, site, contractor, hours, amounts), reads the entry back aloud for confirmation, and stores it in a tamper-evident ledger. Later, entries can be exported as evidence packs for external use.
+Saakshi gives workers an independent, voice-driven record of daily work, agreed wages, payments received, and unpaid dues:
 
-The overall approach is: voice entry → transcription + structuring → worker confirmation → hash-chained storage → exportable evidence packs. No paper, no intermediaries, no reliance on employer-held records.
-
----
-
-## Key Features
-
-- **Voice entry**: Workers dictate their day; the system transcribes and structures the recording.
-- **Hash-chained ledger**: Each entry is cryptographically linked to the previous one, providing tamper-evidence.
-- **PIN-protected authentication**: Workers register with a 4-digit PIN; access is guarded via JWT bearer tokens.
-- **Evidence packs**: Confirmed entries can be exported as PDF + ZIP audio summaries for legal-aid or NGO use.
-- **Contractor confirmation**: One-time share links allow contractors to confirm or dispute entries.
-- **Multilingual support**: Hindi, Kannada, Bengali, and English language support for transcription, UI, and TTS read-back.
+1. **Quick Onboarding & PIN Lock** — Workers register with an alias, select their preferred language, and secure their ledger with a 4-digit PIN.
+2. **Voice Wage Entry** — Workers speak naturally about their workday (for example: site, contractor, hours or days worked, agreed pay, and amount paid).
+3. **Structured Extraction & Spoken Read-Back** — Spoken narration is transcribed and structured into clear fields, with any balance due (`agreed - paid`) computed automatically. When critical details are missing, Saakshi asks focused clarification questions and reads the entry back aloud for verification before saving.
+4. **Append-Only, Tamper-Evident Ledger** — Once confirmed by the worker, entries are sealed in chronological order using a cryptographic hash chain. Entries are never silently overwritten; corrections are recorded as new linked entries.
+5. **Two-Sided Contractor Confirmation** — Workers can generate a one-time link for any confirmed entry so a contractor or supervisor can confirm or dispute it (by voice or buttons, with an optional reason) without signing up or installing an app. Unanswered entries remain explicitly marked rather than treated as accepted.
+6. **Integrity Check & Evidence Packs** — Workers can verify that their ledger history is intact and export any date range as a dated **Evidence Pack** consisting of a formatted PDF wage summary and a ZIP archive with the manifest, summary, and recorded voice clips.
 
 ---
 
-## How It Works
+## Supported Languages
 
-A worker records a voice memo via the phone. The system transcribes it, extracts structured fields (work date, site name, contractor name, hours, agreed and paid amounts), and presents the transcript back for the worker to confirm. Upon confirmation, the entry is stored in a hash-chained ledger. Later, the worker can export some or all of their entries as an evidence pack — a PDF summary plus an audio ZIP file — that can be shared with legal-aid providers, NGOs, or contractors.
+- **Hindi**
+- **Kannada**
+- **Bengali**
+- **English**
 
-```mermaid
-graph LR
-    subgraph FE["Frontend\n(React + Vite)"]
-        UI[User Interface]
-        UI -->|HTTP, WS| API[api.ts Axios]
-        UI -->|Bearer token| Auth[Auth interceptors]
-    end
-
-    subgraph BE["Backend\n(FastAPI + Uvicorn)"]
-        API -->|Route handlers| ROUTES[auth, entries, contractor, evidence, voice]
-        ROUTES -->|SQLAlchemy| DB[(Database<br/>SQLite / Neon Postgres)]
-        ROUTES -->|bcrypt| PASSWORD[PIN hashing]
-        ROUTES -->|PyJWT| TOKENS[JWT create/verify]
-        ROUTES -->|HashChain| CHAIN[Hash chain service]
-        ROUTES -->|ReportLab| PDF[PDF generation]
-        ROUTES -->|zipfile| ARCHIVE[ZIP archive]
-        ROUTES -->|Voice service| VOICE[STT/TTS (Gnani / FakeVoice)]
-    end
-
-    DB -->|Workers, Entries, Evidence packs| ROUTES
-    VOICE -->|STT transcript, TTS audio| API
-
-    style FE fill:#e3f2fd,stroke:#1976d2,stroke-width:2px
-    style BE fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    style DB fill:#fff3e0,stroke:#fb8c00,stroke-width:2px
-```
-
-**User journey**: Register → Login → Record voice → Review transcript → Confirm entry → View entries → Export evidence pack → Share with contractor.
+Language preferences apply across the interface, speech recognition, and spoken read-back, and can be switched at any time in settings.
 
 ---
 
-## Who Can Benefit
+## Core Design Principles
 
-- **Daily-wage workers** in construction, agriculture, or informal sectors who need portable, trusted wage records
-- **Migrant workers** who move between sites and need a record that travels with them
-- **Legal-aid clinics and NGO case workers** who need verified entry records to support claims
-- **Supervisors and contractors** who need to confirm or dispute entries via one-time share links
-
----
-
-## Technology Stack
-
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, React Router, React i18next, Zustand, Axios
-- **Backend**: FastAPI, Python 3.11+/3.12+, SQLAlchemy 2.0, Alembic, Pydantic v2, Passlib[bcrypt], PyJWT
-- **Database**: SQLite for local development; PostgreSQL/Neon for production
-- **Voice/Audio**: FakeVoice (default, simulated STT/TTS) or Gnani integration (production STT/TTS via WebSocket)
-- **Linting/Format**: Ruff, Black (target Python 3.11), Prettier (frontend)
-- **Testing**: pytest, httpx, Playwright
+- **Worker-Owned Privacy** — Wage logs belong to the worker and stay private unless the worker explicitly generates a share link or exports an evidence pack.
+- **Read-Back Before Saving** — Entries are presented and read back aloud before confirmation, ensuring workers can verify numbers and details without needing to type or read every script fluently.
+- **Unconfirmed Never Means Agreed** — Contractor non-response or dispute is recorded transparently alongside confirmed entries, distinguishing between draft, worker-confirmed, shared, contractor-confirmed, disputed, and unconfirmed records.
+- **Dated Record, Not Legal Advice** — Saakshi creates a dated, tamper-evident two-sided record to aid wage-recovery helplines and case workers; formal legal weight depends on local labour authorities and clinics.
 
 ---
 
-## Project Vision
+## Who It Serves
 
-Saakshi imagines a world where every worker owns a portable, cryptographically secured record of their labor. By replacing paper with voice-driven digital records, the project aims to reduce wage theft, simplify evidence collection for legal-aid providers, and give migrant workers a record that moves with them across sites and seasons. The long-term goal is to make verified work history as portable as a phone number — enabling fairer labor practices and stronger social protection for those who need it most.
-
----
-
-*Saakshi is an open-source project. Contributions, feedback, and collaborations are welcome.*
+- **Daily-Wage & Migrant Workers** — Keep a portable, verifiable history of work, partial payments, and pending dues across sites and employers.
+- **Contractors & Site Supervisors** — Quickly confirm or dispute shared wage entries from a link with zero registration.
+- **NGOs, Labour Helplines & Legal-Aid Clinics** — Receive clear date-range PDF summaries, integrity verification status, and original voice recordings when assisting workers.
