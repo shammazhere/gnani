@@ -6,9 +6,10 @@ Create Date: 2026-11-11 00:00:00.000000
 
 """
 
-from alembic import op
-import sqlalchemy as sa
 from collections.abc import Sequence
+
+import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "002_add_worker_is_active"
