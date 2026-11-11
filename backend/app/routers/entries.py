@@ -585,6 +585,7 @@ async def confirm_voice_draft(
             detail="Worker not found or account is inactive",
         )
 
+
 @router.get("/", response_model=list[EntryResponse])
 async def get_entries(
     current_worker_id: CurrentWorker,

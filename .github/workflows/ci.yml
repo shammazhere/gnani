@@ -27,7 +27,7 @@ jobs:
           ruff check .
       - name: Check formatting with black
         run: |
-          black --check .
+          black --check --target-version py311 .
 
   backend-test:
     runs-on: ubuntu-latest
