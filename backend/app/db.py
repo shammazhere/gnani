@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from threading import Lock
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 try:
@@ -20,6 +20,7 @@ __all__ = [
     "Base",
     "SessionLocal",
     "engine",
+    "ensure_schema_columns",
     "ensure_tables_ready",
     "get_db",
     "normalize_database_url",
@@ -69,6 +70,24 @@ engine = create_engine(database_url, **engine_kwargs)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def ensure_schema_columns(bind_engine=engine) -> None:
+    """Backfill columns added after 001_initial_schema on pre-existing databases."""
+    inspector = inspect(bind_engine)
+    if not inspector.has_table("workers"):
+        return
+    cols = {col["name"] for col in inspector.get_columns("workers")}
+    if "is_active" not in cols:
+        if bind_engine.dialect.name == "sqlite":
+            stmt = "ALTER TABLE workers ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"
+        else:
+            stmt = (
+                "ALTER TABLE workers "
+                "ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE"
+            )
+        with bind_engine.begin() as conn:
+            conn.execute(text(stmt))
+
+
 def ensure_tables_ready() -> None:
     """Create schema tables once per cold start when ASGI lifespan is bypassed."""
     global _tables_ready
@@ -78,6 +97,7 @@ def ensure_tables_ready() -> None:
         if _tables_ready:
             return
         Base.metadata.create_all(bind=engine)
+        ensure_schema_columns(engine)
         _tables_ready = True
 
 

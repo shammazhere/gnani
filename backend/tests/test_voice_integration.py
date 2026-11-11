@@ -113,7 +113,10 @@ def test_voice_router_mounted_and_full_stt_extract_draft_confirm_evidence_flow(
     )
     assert created.status_code == 201
     entry = created.json()
-    assert entry["due_inr"] == max(0.0, float(draft["agreed_amount_inr"] or 0) - float(draft["paid_amount_inr"] or 0))
+    assert entry["due_inr"] == max(
+        0.0,
+        float(draft["agreed_amount_inr"] or 0) - float(draft["paid_amount_inr"] or 0),
+    )
 
     confirmed = tc.post(f"/api/entries/{entry['id']}/confirm", headers=headers)
     assert confirmed.status_code == 200
@@ -132,13 +135,20 @@ def test_voice_router_mounted_and_full_stt_extract_draft_confirm_evidence_flow(
     zip_res = tc.get(pack["zip_download_url"], headers=headers)
     assert zip_res.status_code == 200
     with zipfile.ZipFile(io.BytesIO(zip_res.content)) as zf:
-        assert any(Path(saved_audio["audio_ref"]).name in name for name in zf.namelist())
+        assert any(
+            Path(saved_audio["audio_ref"]).name in name for name in zf.namelist()
+        )
 
     # 4) TTS & confirmation classification endpoints work through main app
-    cls_res = tc.post("/api/voice/classify-confirmation", json={"transcript": "haan thik hai", "lang": "hi-IN"})
+    cls_res = tc.post(
+        "/api/voice/classify-confirmation",
+        json={"transcript": "haan thik hai", "lang": "hi-IN"},
+    )
     assert cls_res.status_code == 200 and cls_res.json()["result"] == "yes"
 
-    tts_res = tc.post("/api/voice/tts", json={"text": "Suresh ke paas 400 baaki", "lang": "hi-IN"})
+    tts_res = tc.post(
+        "/api/voice/tts", json={"text": "Suresh ke paas 400 baaki", "lang": "hi-IN"}
+    )
     assert tts_res.status_code == 200 and len(tts_res.content) > 0
 
 
@@ -154,3 +164,41 @@ def test_vercel_entrypoint_and_quoted_database_url() -> None:
     assert normalize_database_url(
         '  "postgres://u:p@ep.neon.tech/neondb?sslmode=require" '
     ) == ("postgresql+psycopg://u:p@ep.neon.tech/neondb?sslmode=require")
+
+
+def test_ensure_schema_columns_backfills_worker_is_active(tmp_path: Path) -> None:
+    from sqlalchemy import create_engine as sa_create_engine
+    from sqlalchemy import inspect, text
+
+    from app.db import ensure_schema_columns
+
+    db_file = tmp_path / "legacy.db"
+    legacy_engine = sa_create_engine(f"sqlite:///{db_file}")
+    try:
+        with legacy_engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE workers ("
+                    "id INTEGER PRIMARY KEY, "
+                    "alias VARCHAR NOT NULL UNIQUE, "
+                    "pin_hash VARCHAR NOT NULL"
+                    ")"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO workers (id, alias, pin_hash) "
+                    "VALUES (1, 'olduser', 'hash')"
+                )
+            )
+
+        ensure_schema_columns(legacy_engine)
+        cols = {c["name"] for c in inspect(legacy_engine).get_columns("workers")}
+        assert "is_active" in cols
+        with legacy_engine.connect() as conn:
+            val = conn.execute(
+                text("SELECT is_active FROM workers WHERE id = 1")
+            ).scalar()
+        assert bool(val) is True
+    finally:
+        legacy_engine.dispose()

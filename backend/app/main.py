@@ -38,7 +38,7 @@ except ModuleNotFoundError:
     )
 
 from app.config import Settings
-from app.db import Base, engine, ensure_tables_ready
+from app.db import Base, engine, ensure_schema_columns, ensure_tables_ready
 from app.routers import auth, contractor, entries, evidence
 from app.services.audio_store import AppAudioStore
 
@@ -131,6 +131,7 @@ async def lifespan(app: FastAPI):
     # Create database tables
     logger.info("Creating database tables...")
     Base.metadata.create_all(bind=engine)
+    ensure_schema_columns(engine)
 
     logger.info("Database tables created successfully.")
 
